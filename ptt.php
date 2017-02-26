@@ -1,16 +1,21 @@
 <?php
+// Send headers first
+header("Content-Type: text/xml");
+header("Expires: -1");
 
 // Location of php files for phones (change the webserver/path to resemble your webserver)
 $URLBase = "http://webserver/path/";
 
 // Multicast address and port
 $MCAddress = "225.3.15.13";
-$MCPort = "16384";
+// The lower port changed with Cisco streaming API (that is not supported on all platforms)
+// 20480 to 32768 is a safe range on all platforms
+$MCPort = "20480";
 
-// Phone user/pass to be checked by the script defined in the authenticationURL 
+// Phone user/pass to be checked by the script defined in the authenticationURL
 // the authentication script should return AUTHORIZED when login is successfull
 // see: https://github.com/chan-sccp/chan-sccp/wiki/Setup-phone-authorization
-// If you are using a flat file returning 'AUTHORIZED', without checking then the 
+// If you are using a flat file returning 'AUTHORIZED', without checking then the
 // user/pwd setting does not matter, but you still need to set it to something.
 $user = "cisco";
 $pwd = "cisco";
@@ -27,41 +32,41 @@ function push2phone($ip, $uri, $uid, $pwd, $priority = 0)
 {
     $response = "";
     $executeItems = "";
-    $auth = base64_encode($uid.":".$pwd);
+    $auth = base64_encode("{$uid}:{$pwd}");
 
     // See if there are any comma's in $uri
     if (strpos($uri, ',') >= 0) {
         // Yup, explode it to an array
         $uris = explode(',', $uri);
-        
+
         // Build a <ExecuteItem> for each supplied URI
         foreach($uris as $item) {
-            $executeItems .= "<ExecuteItem Priority=\"{$priority}\" URL=\"{$item}\"/>";
+            $executeItems .= '<ExecuteItem Priority="{$priority}" URL="{$item}"/>';
         }
+    } else {
+    // Otherwise we are sending only one command
+        $executeItems = '<ExecuteItem Priority="{$priority}" URL="{$item}"/>';
     }
-    // Nope, take it as it is
-    else $executeItems = "<ExecuteIem Priority=\"{$priority}\" URL=\"{$item}\"/>";
 
     $xml = "<CiscoIPPhoneExecute>$executeItems</CiscoIPPhoneExecute>";
     $xml = "XML=".urlencode($xml);
 
     $post = "POST /CGI/Execute HTTP/1.0\r\n";
-    $post .= "Host: $ip\r\n";
-    $post .= "Authorization: Basic $auth\r\n";
+    $post .= "Host: {$ip}\r\n";
+    $post .= "Authorization: Basic {$auth}\r\n";
     $post .= "Connection: close\r\n";
     $post .= "Content-Type: application/x-www-form-urlencoded\r\n";
     $post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
 
     //
     // Have to make sure we @ the fsockopen or the headers won't get sent
-    // and the phone browser will freak if we toss a error (like host
-    // not found.)
+    // and the phone browser will freak if we toss a error (like host not found.)
     //
     $fp = @fsockopen ( $ip, 80, $errno, $errstr, 10);
     if(!$fp){ return "$errstr ($errno)"; }
     else
     {
-        fputs($fp, $post.$xml);
+        fputs($fp, $post . $xml);
         flush();
         while (!feof($fp))
         {
@@ -74,82 +79,78 @@ function push2phone($ip, $uri, $uid, $pwd, $priority = 0)
 }
 
 // A real phone will always pass a name=SEP<MAC>
-if (isset($_GET['name'])) {
-	$MAC = $_GET['name'];
+if(isset($_GET['name'])) {
+    $MAC = $_GET['name'];
 }
 else {
-	echo "<CiscoIPPhoneText><Title>Error!</Title><Text>No MAC provided by phone!</Text></CiscoIPPhoneText>";
-	die();
+    echo "<CiscoIPPhoneText><Title>Error!</Title><Text>No MAC provided by phone!</Text></CiscoIPPhoneText>";
+    die();
 }
 
-// Check if we're closing the app, if so tell the other phones to do the same
-if (isset($_GET['close'])) {
-
-	// Tell each phone to stop multicast Rx/Tx and send the Exit softkey
-	foreach($phones as $phone) {
-		push2phone($phone, "RTPRx:Stop,RTPTx:Stop,SoftKey:Exit", $user, $pwd);
-	}
-	die();
-}
-
-//
-// Check for istalking, if it doesn't exist this must be
-// the first time the phone has called this page 
-//
-if (isset($_GET['istalking'])) {
-	$istalking = $_GET['istalking'];
-}
-else {
-	//
-	// Must be our initial request for the page, lets tell everyone to listen
-	//
-	$istalking = "false";
+if(isset($_GET['close'])) {				// Check if we're closing the app, if so tell the other phones to do the same
+    // Tell each phone to stop multicast Rx/Tx and send the Exit softkey
+    foreach($phones as $phone) {
+        push2phone($phone, "RTPRx:Stop,RTPTx:Stop,SoftKey:Exit", $user, $pwd);
+        // If this is one way PTT (phone sending audio is not receiving it - it is not listed in phones array)
+        if(!in_array($_SERVER['REMOTE_ADDR'], $phones)) {
+            // Send text to phone advising PTT ended, otherwise phone will complain about XML format
+            echo "<CiscoIPPhoneText><Title>PTT</Title><Text>PTT session ended.</Text></CiscoIPPhoneText>";
+        }
+    }
+    die();
+} else {						// if PTT session is still in progress
+    // Check for istalking, if it doesn't exist this must be
+    // the first time the phone has called this page
+    if(isset($_GET['istalking'])) {
+        $istalking = $_GET['istalking'];
+    }
+    else {
+        // Must be our initial request for the page, lets tell everyone to listen
+        $istalking = "false";
         foreach($phones as $phone) {
-		push2phone($phone, "RTPMRx:{$MCAddress}:{$MCPort}", $user, $pwd);
-	}
+            push2phone($phone, "RTPMRx:{$MCAddress}:{$MCPort}", $user, $pwd);
+        }
+    }
 }
 
-// Send headers
-header("Content-Type: text/xml");
-header("Expires: -1");
-
-// Cisco headers
+// Set phone's app window title and promt
 echo "<CiscoIPPhoneText><Title>PTT</Title><Prompt>Use soft keys to talk</Prompt>";
 
 // PTT operation
-if ($istalking !="true") {
-	echo "<Text>Press and hold the [Talk] soft key to transmit. If you want to speak continuously without holding a button down, you can press and release the [Lock] soft key.</Text>";
+if($istalking != "true") {
+    echo "<Text>Press and hold the [Talk] soft key to transmit. If you want to speak continuously without holding a button down, you can press and release the [Lock] soft key.</Text>";
 
-        echo "<SoftKeyItem>";
-	echo "<Name>Talk</Name>";
-	echo "<URL>RTPTx:Stop</URL>";
-	echo "<Position>1</Position>";
-	echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
-	echo "</SoftKeyItem>";
+    echo "<SoftKeyItem>";
+    echo "<Name>Talk</Name>";
+    echo "<URL>RTPTx:Stop</URL>";
+    echo "<Position>1</Position>";
+    echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
+    echo "</SoftKeyItem>";
 
-	echo "<SoftKeyItem>";
-	echo "<Name>Exit</Name>";
-	echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;close</URL>";
-	echo "<Position>3</Position>";
-	echo "<URLDown>RTPMRx:Stop</URLDown>";
-	echo "</SoftKeyItem>";
+    echo "<SoftKeyItem>";
+    echo "<Name>Exit</Name>";
+    echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;close=true</URL>";
+    echo "<Position>3</Position>";
+    echo "<URLDown>RTPRx:Stop</URLDown>";
+    echo "</SoftKeyItem>";
 
-	echo "<SoftKeyItem>";
-	echo "<Name>Lock</Name>";
-	echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;istalking=true</URL>";
-	echo "<Position>4</Position>";
-	echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
-	echo "</SoftKeyItem>";
-} 
+    echo "<SoftKeyItem>";
+    echo "<Name>Lock</Name>";
+    echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;istalking=true</URL>";
+    echo "<Position>4</Position>";
+    echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
+    echo "</SoftKeyItem>";
+}
 // Full-duplex, always on
 else {
-	echo "<Text>Press and release the [Unlock] soft key to return.</Text>";
-	echo "<SoftKeyItem>";
-	echo "<Name>Unlock</Name>";
-	echo "<URL>$URLBase/ptt.php?name=$MAC&amp;istalking=false</URL>";
-	echo "<Position>4</Position>";
-	echo "<URLDown>RTPTx:Stop</URLDown>";
-	echo "</SoftKeyItem>";
+    echo "<Text>Press and release the [Unlock] soft key to return.</Text>";
+    echo "<SoftKeyItem>";
+    echo "<Name>Unlock</Name>";
+    echo "<URL>$URLBase/ptt.php?name=$MAC&amp;istalking=false</URL>";
+    echo "<Position>4</Position>";
+    echo "<URLDown>RTPTx:Stop</URLDown>";
+    echo "</SoftKeyItem>";
 }
 
 echo "</CiscoIPPhoneText>";
+?>
