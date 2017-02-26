@@ -5,7 +5,7 @@ $baseUrl = $_SERVER['REQUEST_SCHEME'].'://'.$_SERVER['SERVER_NAME'].$_SERVER['RE
 class Device {
 	var $ip;
 	var $authName 			= 'cisco';
-	var $authPassword 		= 'cisco'; 
+	var $authPassword 		= 'cisco';
 
 	function __construct($deviceIp, $authName = 'cisco', $authPassword = 'cisco'){
 		$this->ip 			= $deviceIp;
@@ -37,7 +37,7 @@ class Device {
 			}
 
 		}
-		
+
 		return $response;
 	}
 }
@@ -76,7 +76,7 @@ class Push2Talk {
 	function start(){
 		$this->execute(
 			array(sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort))
-		);	
+		);
 	}
 
 	function stop(){
@@ -84,14 +84,14 @@ class Push2Talk {
 	}
 
 	function execute(array $uris, $priority = 0){
-		$xmlExecute = array_map(function ($value) { 
-			return sprintf(Push2Talk::XML_EXECUTE_ITEM, $priority, $value); 
+		$xmlExecute = array_map(function ($value) {
+			return sprintf(Push2Talk::XML_EXECUTE_ITEM, $priority, $value);
 		}, $uris); 															// build ExecuteItem xml data-array
 		$xml = sprintf(Push2Talk::XML_EXECUTE, implode('',$xmlExecute));	// build xml data including ExecuteItem
 
 		foreach($this->devices as $device) {
 			$device->push($xml);
-		}		
+		}
 	}
 }
 
@@ -157,7 +157,7 @@ do {  // while loop for error handling
 		$response .=  "<Position>4</Position>";
 		$response .=  "<URLDown>RTPMTx:{$push2Talk->multicastAddress}:{$push2Talk->multicastPort}</URLDown>";
 		$response .=  "</SoftKeyItem>";
-	} 
+	}
 	// Full-duplex, always on
 	else {
 		$response .=  "<Text>Press and release the [Unlock] soft key to return.</Text>";
