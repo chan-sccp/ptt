@@ -14,7 +14,7 @@ class Device {
 	}
 
 
-	function push(){
+	function push($xml){
 		$response = '';
 
 		$auth = base64_encode($this->authName.":".$this->authPassword);
@@ -24,7 +24,7 @@ class Device {
 		$post .= "Authorization: Basic ${auth}\r\n";
 		$post .= "Connection: close\r\n";
 		$post .= "Content-Type: application/x-www-form-urlencoded\r\n";
-		$post .= "Content-Length: ".strlen($data)."\r\n\r\n";
+		$post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
 		$post .= "XML=".urlencode($xml);
 
 		$fp = @fsockopen ($this->ip, 80, $errno, $response, 10);
