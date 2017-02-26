@@ -17,16 +17,16 @@ class Device {
 	function push($xml){
 		$response = '';
 
-		$auth = base64_encode($this->authName.":".$this->authPassword);
+		$auth = base64_encode($this->authName.':'.$this->authPassword);
 
 		$post = "POST /CGI/Execute HTTP/1.0\r\n";
-		$post .= "Host: ${ip}\r\n";
-		$post .= "Authorization: Basic ${auth}\r\n";
+		$post .= "Host: {$this->ip}\r\n";
+		$post .= "Authorization: Basic {$auth}\r\n";
 		$post .= "Connection: close\r\n";
 		$post .= "Content-Type: application/x-www-form-urlencoded\r\n";
 		$post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
 		$post .= "XML=".urlencode($xml);
-
+echo $post;
 		$fp = @fsockopen ($this->ip, 80, $errno, $response, 10);
 		if($fp){
 			fputs($fp, $post);
