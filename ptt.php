@@ -104,7 +104,6 @@ $push2Talk->addDevices(array('10.0.2.225', '10.0.2.227'));
 //$push2Talk->multicastAddress = '225.3.15.13';
 //$push2Talk->multicastPort = 16384
 
-$push2Talk->execute(array('RTPRx:Stop','RTPTx:Stop','SoftKey:Exit'));
 
 $response = '';
 do {  // while loop for error handling
