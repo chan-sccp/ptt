@@ -36,11 +36,11 @@ function push2phone($ip, $uri, $uid, $pwd, $priority = 0)
         
         // Build a <ExecuteItem> for each supplied URI
         foreach($uris as $item) {
-            $executeItems .= "<ExecuteItem Priority\"{$priority}\" URL=\"{$item}\"/>";
+            $executeItems .= "<ExecuteItem Priority=\"{$priority}\" URL=\"{$item}\"/>";
         }
     }
     // Nope, take it as it is
-    else $executeItems = "<ExecuteIem Priority\"{$priority}\" URL=\"{$item}\"/>";
+    else $executeItems = "<ExecuteIem Priority=\"{$priority}\" URL=\"{$item}\"/>";
 
     $xml = "<CiscoIPPhoneExecute>$executeItems</CiscoIPPhoneExecute>";
     $xml = "XML=".urlencode($xml);
