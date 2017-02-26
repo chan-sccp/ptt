@@ -26,7 +26,7 @@ class Device {
 		$post .= "Content-Type: application/x-www-form-urlencoded\r\n";
 		$post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
 		$post .= "XML=".urlencode($xml);
-echo $post;
+
 		$fp = @fsockopen ($this->ip, 80, $errno, $response, 10);
 		if($fp){
 			fputs($fp, $post);
