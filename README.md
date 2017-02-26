@@ -20,7 +20,7 @@ To use the script you'll need PHP on a webserver accessible by the phones.  You'
 ```
 
 Note:
-the <authenticationURL> in SEP<MAC>.cnf.xml has to be set and should return AUTHORIZED for the user/pwd defined in the script below (see: [[Setup phone authorization]]). 
+the <authenticationURL> in SEP<MAC>.cnf.xml has to be set and should return AUTHORIZED for the user/pwd defined in the script below (see: [Setup phone authorization](https://github.com/chan-sccp/chan-sccp/wiki/Setup-phone-authorization). 
 
 You can also use push2talk on other Cisco Device that don't have a Push-to-Talk button. You just add the ptt.php script to your services page, to make it accessible
 to the user.
