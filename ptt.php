@@ -18,14 +18,15 @@ class Device {
 		$response = '';
 
 		$auth = base64_encode($this->authName.':'.$this->authPassword);
+		$postData = "XML=".urlencode($xml);
 
 		$post = "POST /CGI/Execute HTTP/1.0\r\n";
 		$post .= "Host: {$this->ip}\r\n";
 		$post .= "Authorization: Basic {$auth}\r\n";
 		$post .= "Connection: close\r\n";
 		$post .= "Content-Type: application/x-www-form-urlencoded\r\n";
-		$post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
-		$post .= "XML=".urlencode($xml);
+		$post .= "Content-Length: ".strlen($postData)."\r\n\r\n";
+		$post .= $postData;
 
 		$fp = @fsockopen ($this->ip, 80, $errno, $response, 10);
 		if($fp){
