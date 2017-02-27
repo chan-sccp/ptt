@@ -15,7 +15,7 @@ class Device {
 
 
 	function push($xml){
-		$response = '';
+		$response = array();
 
 		$auth = base64_encode($this->authName.':'.$this->authPassword);
 		$postData = "XML=".urlencode($xml);
@@ -28,18 +28,33 @@ class Device {
 		$post .= "Content-Length: ".strlen($postData)."\r\n\r\n";
 		$post .= $postData;
 
-		$fp = @fsockopen ($this->ip, 80, $errno, $response, 10);
-		if($fp){
-			fputs($fp, $post);
-			flush();
-			while (!feof($fp)) {
-				$response .= fgets($fp, 1024);
-				flush();
-			}
-
+		// TODO: take SSL/443 into account
+		$fp = @fsockopen ($this->ip, 80, $errno, $errstr, 10);
+		if(!$fp){
+			syslog(LOG_ALERT, "ERROR: fsockopen failed. Error no:$errno - $errstr");
+			return FALSE;
 		}
 
-		return $response;
+		fputs($fp, $post);
+		flush();
+		while (!feof($fp)) {
+			$response[] = fgets($fp, 4096);
+			flush();
+		}
+		fclose($fp);
+
+		syslog(LOG_DEBUG, "pushed xml:$xml");
+		foreach ($response as $key => $r) {
+			if (stripos($r, 'HTTP/1.1') === 0) {
+				list(,$code, $status) = explode(' ', $r, 3);
+				syslog(LOG_DEBUG, "Return Code: $code, Status: $status");
+				break;
+			}
+		}
+		syslog(LOG_DEBUG, "response:" . print_r($response, TRUE));
+
+		// TODO: Should we return the status code or boolean ?
+		return ($status == 200) ? TRUE : FALSE;
 	}
 }
 
@@ -75,12 +90,14 @@ class Push2Talk {
 	}
 
 	function start(){
+		// TODO: handle result from device->push -> adding participant to listeners
 		$this->execute(array(
 			sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort)
 		));
 	}
 
 	function stop(){
+		// TODO: handle result from device->push -> adding participant to listeners
 		$this->execute(array('RTPRx:Stop','RTPTx:Stop','Init:Services'));
 	}
 
@@ -91,7 +108,7 @@ class Push2Talk {
 		$xml = sprintf(Push2Talk::XML_EXECUTE, implode('',$xmlExecute));	// build xml data including ExecuteItem
 
 		foreach($this->devices as $device) {
-			$device->push($xml);
+			yield $device->push($xml);					// return push result back to caller
 		}
 	}
 }
@@ -100,6 +117,7 @@ class Push2Talk {
 $push2Talk = new Push2Talk;
 $push2Talk->setAuthentication('cisco', 'cisco');
 $push2Talk->addDevices(array('10.0.2.225', '10.0.2.227'));
+//$push2Talk->addDevices(array('10.15.15.205', '10.15.15.217', '10.15.15.144', '10.15.15.226'));  // Testing devices DdG
 
 // optional settings
 //$push2Talk->multicastAddress = '225.3.15.13';
