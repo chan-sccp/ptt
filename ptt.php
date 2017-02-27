@@ -146,14 +146,14 @@ do {  // while loop for error handling
 
 		$response .=  "<SoftKeyItem>";
 		$response .=  "<Name>Exit</Name>";
-		$response .=  "<URL>{$baseUrl}?name=#DEVICENAME#&amp;action=close</URL>";
+		$response .=  "<URL>{$baseUrl}?name={$deviceName}&amp;action=close</URL>";
 		$response .=  "<Position>3</Position>";
 		$response .=  "<URLDown>RTPMRx:Stop</URLDown>";
 		$response .=  "</SoftKeyItem>";
 
 		$response .=  "<SoftKeyItem>";
 		$response .=  "<Name>Lock</Name>";
-		$response .=  "<URL>{$baseUrl}?name=#DEVICENAME#&amp;action=lock</URL>";
+		$response .=  "<URL>{$baseUrl}?name={$deviceName}&amp;action=lock</URL>";
 		$response .=  "<Position>4</Position>";
 		$response .=  "<URLDown>RTPMTx:{$push2Talk->multicastAddress}:{$push2Talk->multicastPort}</URLDown>";
 		$response .=  "</SoftKeyItem>";
@@ -161,7 +161,7 @@ do {  // while loop for error handling
 		$response .=  "<Text>Press and release the [Unlock] soft key to return.</Text>";
 		$response .=  "<SoftKeyItem>";
 		$response .=  "<Name>Unlock</Name>";
-		$response .=  "<URL>{$URLBase}?name=#DEVICENAME#&amp;action=unlock</URL>";
+		$response .=  "<URL>{$URLBase}?name={$deviceName}&amp;action=unlock</URL>";
 		$response .=  "<Position>4</Position>";
 		$response .=  "<URLDown>RTPTx:Stop</URLDown>";
 		$response .=  "</SoftKeyItem>";
