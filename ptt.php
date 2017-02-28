@@ -64,31 +64,43 @@ class Push2Talk {
 	public $multicastAddress	= '225.3.15.13';
 	public $multicastPort 		= 20480;
 
+	var $baseUrl			= null;
 	var $authName 			= 'cisco';
 	var $authPassword 		= 'cisco';
 	var $deviceName 		= null;
-
+	var $originator			= null;
 	var $devices 			= array();
 
-	function __construct(){ }
+	function __construct() {
+		global $baseUrl;
+		$this->baseUrl = $baseUrl;
+	 }
 
 	function setAuthentication($authName, $authPassword){
 		$this->authName 	= $authName;
 		$this->authPassword 	= $authPassword;
 	}
 
-	function addDevice($deviceIp){
+	function addDevice($deviceIp) {
 		$this->devices[] 	= new Device($deviceIp, $this->authName, $this->authPassword);
 	}
 
-	function addDevices(array $ips){
+	function addDevices(array $ips) {
 		foreach($ips as $ip){
 			$this->addDevice($ip);
 		}
 	}
 
+	function getDevices() {
+		$ipsArray = array();
+		foreach($this->devices as $device) {
+			$ipsArray[] = $device->ip;
+		}
+		return $ipsArray;
+	}
+
 	function findDeviceByIP($ip) {
-		foreach($this->device as $device) {
+		foreach($this->devices as $device) {
 			if ($ip == $device->ip) {
 				return $device;
 			}
@@ -96,31 +108,62 @@ class Push2Talk {
 		return false;
 	}
 
-	function start(){
+	function buildFromCookie($cookie) {
+		$content = json_decode($cookie);
+		if ($content) {
+			$this->originator = $content->{'originator'};
+			foreach($content->{'ips'} as $ip) {
+				$this->addDevice($ip);
+			}
+		} else {
+			syslog(LOG_ALERT, "cookie is corrupt");
+		}
+	}
+
+	function buildCookie() {
+		$content = array();
+		$content['ips'] = $this->getDevices();
+		$content['originator'] = $this->originator;
+		setcookie("ptt", json_encode($content), time()+300, "/");
+	}
+
+
+	function start($originator){
 		// TODO: handle result from device->push -> adding participant to listeners
-		$this->execute(array(
-			sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort)
-		));
+		$this->originator = $originator;
+		foreach($this->devices as $device) {
+			if ($device->ip != $originator) {
+				$this->execute(array(
+					sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort).
+					htmlentities("{$baseUrl}?name={$this->deviceName}&action=default&originator={$this->originator}")
+				), 0, $device);
+			} else {
+				$this->execute(array(
+					sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort)
+				), 0, $device);
+			}
+		}
 		syslog(LOG_DEBUG, "start");
 	}
 
-	function stop(){			// stop entire ptt session
+	function stop() {			// stop entire ptt session
 		// TODO: handle result from device->push -> adding participant to listeners
 		$this->execute(array('RTPRx:Stop','RTPTx:Stop','Init:Services'));
 		syslog(LOG_DEBUG, "stop");
 	}
 
-	function leave($ip){			// single participant leaving
+	function leave($ip) {			// single participant leaving
 		// TODO: handle result from device->push -> adding participant to listeners
 		$device = $this->findDeviceByIP($ip);
 		if ($device) {
 			$this->execute(array('RTPRx:Stop','RTPTx:Stop','Init:Services'), $device);
+			unset($device);
 		}
 		syslog(LOG_DEBUG, "leave: $ip");
 	}
 
-	function execute(array $uris, $priority = 0, $device = false){
-		$xmlExecute = array_map(function ($value) {
+	function execute(array $uris, $priority = 0, $device = false) {
+		$xmlExecute = array_map(function ($value) use ($priority) {
 			return sprintf(Push2Talk::XML_EXECUTE_ITEM, $priority, $value);
 		}, $uris); 									// build ExecuteItem xml data-array
 		$xml = sprintf(Push2Talk::XML_EXECUTE, implode('',$xmlExecute));		// build xml data including ExecuteItem
@@ -139,8 +182,8 @@ class Push2Talk {
 
 $push2Talk = new Push2Talk;
 $push2Talk->setAuthentication('cisco', 'cisco');
-$push2Talk->addDevices(array('10.0.2.225', '10.0.2.227'));
-//$push2Talk->addDevices(array('10.15.15.205', '10.15.15.217'));					// Testing devices DdG
+$devices = array('10.0.2.225', '10.0.2.227');							// Testing marcello
+//$devices = array('10.15.15.205', '10.15.15.217');						// Testing diederik
 
 // optional settings
 //$push2Talk->multicastAddress = '225.3.15.13';
@@ -152,18 +195,21 @@ do {  // while loop for error handling
 	$isLocked = false;
 	$originator = isset($_GET['originator']) ? $_GET['originator'] : false;
 	$action = isset($_GET['action']) ? $_GET['action'] : 'start';
+	$deviceName = isset($_GET['name']) ? $_GET['name'] : false;
 
-	if (!isset($_GET['name'])){
+	if (!$deviceName && $originator){
 		$response = '<CiscoIPPhoneText><Title>Error!</Title><Text>No MAC provided by phone!</Text></CiscoIPPhoneText>';
 		break;
 	}
 
-	$deviceName = $_GET['name'];
+	if (isset($_COOKIE['ptt'])) {
+		$push2Talk->buildFromCookie($_COOKIE['ptt']);
+	}
 
 	switch($action){
 		case 'start':
-			$originator = $_SERVER['REMOTE_ADDR'];
-			$push2Talk->start();
+			$push2Talk->addDevices($devices);
+			$push2Talk->start($_SERVER['REMOTE_ADDR']);
 			break;
 
 		case 'close':
@@ -187,6 +233,7 @@ do {  // while loop for error handling
 		default:
 			break;
 	}
+	$push2Talk->buildCookie();
 
 	// Cisco headers
 	$response = '<CiscoIPPhoneText><Title>PTT</Title><Prompt>Use soft keys to talk</Prompt>';
