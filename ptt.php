@@ -249,7 +249,7 @@ do {  // while loop for error handling
 
 		$response .=  "<SoftKeyItem>";
 		$response .=  "<Name>Exit</Name>";
-		if ($originator) {
+		if ($originator == $_SERVER['REMOTE_ADDR']) {
 			$response .=  "<URL>" . htmlentities("{$baseUrl}?name={$deviceName}&action=close&originator={$originator}") . "</URL>";
 		} else {
 			$response .=  "<URL>" . htmlentities("{$baseUrl}?action=leave&originator={$originator}") . "</URL>";
