@@ -134,8 +134,8 @@ class Push2Talk {
 		foreach($this->devices as $device) {
 			if ($device->ip != $originator) {
 				$this->execute(array(
-					sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort).
-					htmlentities("{$baseUrl}?name={$this->deviceName}&action=default&originator={$this->originator}")
+					sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort),
+					htmlentities("{$baseUrl}?name=#DEVICENAME#&action=default&originator={$this->originator}")
 				), 0, $device);
 			} else {
 				$this->execute(array(
