@@ -1,156 +1,347 @@
 <?php
-// Send headers first
+// Send headers
 header("Content-Type: text/xml");
 header("Expires: -1");
 
-// Location of php files for phones (change the webserver/path to resemble your webserver)
-$URLBase = "http://webserver/path/";
+$baseUrl = $_SERVER['REQUEST_SCHEME'] . '://' . $_SERVER['SERVER_ADDR'] . ":" . $_SERVER['SERVER_PORT'] . parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-// Multicast address and port
-$MCAddress = "225.3.15.13";
-// The lower port changed with Cisco streaming API (that is not supported on all platforms)
-// 20480 to 32768 is a safe range on all platforms
-$MCPort = "20480";
+class Device {
+	var $ip;
+	var $authName 			= 'cisco';
+	var $authPassword 		= 'cisco';
 
-// Phone user/pass to be checked by the script defined in the authenticationURL
-// the authentication script should return AUTHORIZED when login is successfull
-// see: https://github.com/chan-sccp/chan-sccp/wiki/Setup-phone-authorization
-// If you are using a flat file returning 'AUTHORIZED', without checking then the
-// user/pwd setting does not matter, but you still need to set it to something.
-$user = "cisco";
-$pwd = "cisco";
+	function __construct($deviceIp, $authName = 'cisco', $authPassword = 'cisco'){
+		$this->ip 		= $deviceIp;
+		$this->authName 	= $authName;
+		$this->authPassword	= $authPassword;
+	}
 
-// Used to PUSH commands to participating phones
-$phones = array('10.0.2.225', '10.0.2.227');
+	function push($xml){
+		$response = array();
 
-// Function thanks to Diederik, modified to allow for
-// multiple commands in one PUSH (pass $uri with commands
-// seperated by a comma.)  Also removed echo's and set
-// timeout to 10 seconds (a phone should respond by then right?)
+		$auth = base64_encode($this->authName.':'.$this->authPassword);
+		$postData = "XML=".urlencode($xml);
 
-function push2phone($ip, $uri, $uid, $pwd, $priority = 0)
-{
-    $response = "";
-    $executeItems = "";
-    $auth = base64_encode("{$uid}:{$pwd}");
+		$post = array();
+		$post[] = "POST /CGI/Execute HTTP/1.0\r\n";
+		$post[] = "Host: {$this->ip}\r\n";
+		$post[] = "Authorization: Basic {$auth}\r\n";
+		$post[] = "Connection: close\r\n";
+		$post[] = "Content-Type: application/x-www-form-urlencoded\r\n";
+		$post[] = "Content-Length: ".strlen($postData)."\r\n\r\n";
+		$post[] = $postData;
 
-    // See if there are any comma's in $uri
-    if (strpos($uri, ',') >= 0) {
-        // Yup, explode it to an array
-        $uris = explode(',', $uri);
+		// TODO: take SSL/443 into account
+		$fp = @fsockopen ($this->ip, 80, $errno, $errstr, 10);
+		if(!$fp){
+			syslog(LOG_ALERT, "ERROR: fsockopen failed. Error no:$errno - $errstr");
+			return FALSE;
+		}
 
-        // Build a <ExecuteItem> for each supplied URI
-        foreach($uris as $item) {
-            $executeItems .= '<ExecuteItem Priority="{$priority}" URL="{$item}"/>';
-        }
-    } else {
-    // Otherwise we are sending only one command
-        $executeItems = '<ExecuteItem Priority="{$priority}" URL="{$item}"/>';
-    }
+		fputs($fp, implode($post));
+		flush();
+		while (!feof($fp)) {
+			$response[] = fgets($fp, 4096);
+			flush();
+		}
+		fclose($fp);
 
-    $xml = "<CiscoIPPhoneExecute>$executeItems</CiscoIPPhoneExecute>";
-    $xml = "XML=".urlencode($xml);
+		syslog(LOG_DEBUG, "pushed xml:$xml");
+		foreach ($response as $key => $r) {
+			if (stripos($r, 'HTTP/1.1') === 0) {
+				list(,$code, $status) = explode(' ', $r, 3);
+				syslog(LOG_DEBUG, "Return Code: $code, Status: $status");
+				break;
+			}
+		}
+		syslog(LOG_DEBUG, "response:" . print_r($response, TRUE));
 
-    $post = "POST /CGI/Execute HTTP/1.0\r\n";
-    $post .= "Host: {$ip}\r\n";
-    $post .= "Authorization: Basic {$auth}\r\n";
-    $post .= "Connection: close\r\n";
-    $post .= "Content-Type: application/x-www-form-urlencoded\r\n";
-    $post .= "Content-Length: ".strlen($xml)."\r\n\r\n";
-
-    //
-    // Have to make sure we @ the fsockopen or the headers won't get sent
-    // and the phone browser will freak if we toss a error (like host not found.)
-    //
-    $fp = @fsockopen ( $ip, 80, $errno, $errstr, 10);
-    if(!$fp){ return "$errstr ($errno)"; }
-    else
-    {
-        fputs($fp, $post . $xml);
-        flush();
-        while (!feof($fp))
-        {
-            $response .= fgets($fp, 128);
-            flush();
-        }
-    }
-
-    return $response;
+		// TODO: Should we return the status code or boolean ?
+		return ($status == 200) ? TRUE : FALSE;
+	}
 }
 
-// A real phone will always pass a name=SEP<MAC>
-if(isset($_GET['name'])) {
-    $MAC = $_GET['name'];
+class Push2Talk {
+	const XML_EXECUTE 		= '<CiscoIPPhoneExecute>%s</CiscoIPPhoneExecute>';
+	const XML_EXECUTE_ITEM	= '<ExecuteItem Priority="%d" URL="%s"/>';
+	const URI_START			= 'RTPMRx:%s:%d';
+
+	public $multicastAddress	= '225.3.15.13';
+	public $multicastPort 		= 20480;
+
+	var $baseUrl			= null;
+	var $authName 			= 'cisco';
+	var $authPassword 		= 'cisco';
+	var $originator			= null;
+	var $devices 			= array();
+	var $session 			= null;
+
+	function __construct() {
+		global $baseUrl;
+		$this->baseUrl = $baseUrl;
+	 }
+
+	function setAuthentication($authName, $authPassword){
+		$this->authName	= $authName;
+		$this->authPassword	= $authPassword;
+	}
+
+	function addDevice($deviceIp) {
+		$this->devices[] = new Device($deviceIp, $this->authName, $this->authPassword);
+	}
+
+	function addDevices(array $ips) {
+		foreach($ips as $ip){
+			$this->addDevice($ip);
+		}
+	}
+
+	function findDeviceByIP($ip) {
+		syslog(LOG_DEBUG, "\n*** device leaving:" . $_SERVER['REMOTE_ADDR'] . "\n");
+		foreach($this->devices as $device) {
+			syslog(LOG_DEBUG, "\n*** found device:" . $_SERVER['REMOTE_ADDR'] . "\n");
+			if ($ip == $device->ip) {
+				return $device;
+			}
+		}
+		return false;
+	}
+
+	function createSession() {
+		session_start();
+		$_SESSION['ptt'] = array(
+			'originator' => $this->originator,
+			'participants' => array()
+		);
+		$this->session = session_id();
+	}
+
+	// resume session by id
+	function resumeSession() {
+		if(!isset($_SESSION['ptt'])) {
+			session_id($this->session);
+			session_start();
+		}
+	}
+
+	function getOriginator() {
+		$this->resumeSession();
+		return $_SESSION['ptt']['originator'];
+	}
+
+	function addParticipant($ip) {
+		$this->resumeSession();
+		array_push($_SESSION['ptt']['participants'], $ip);
+	}
+
+	function delParticipant($ip) {
+		$this->resumeSession();
+		$_SESSION['ptt']['participants'] = array_diff($_SESSION['ptt']['participants'], array($ip));
+	}
+
+	function getParticipants() {
+		$this->resumeSession();
+		return $_SESSION['ptt']['participants'];
+	}
+
+	function listParticipants() {
+		$this->resumeSession();
+		return implode("\n", ($_SESSION['ptt']['participants']));
+	}
+
+	function start($originator){
+		// TODO: handle result from device->push -> adding participant to listeners
+		// set the owner of the session
+		$this->originator = $originator;
+		// create a session that will hold participants currently connected
+		$this->createSession();
+		foreach($this->devices as $device) {
+			if ($device->ip != $this->originator) {
+				$this->execute(
+					array(
+						sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort),
+						htmlentities("{$this->baseUrl}?name=#DEVICENAME#&action=join&session={$this->session}"),
+						'Display:On:1'
+					),
+					0, $device
+				);
+			} else {
+				$this->execute(
+					array(
+						sprintf(Push2Talk::URI_START, $this->multicastAddress, $this->multicastPort)
+					),
+					0, $device
+				);
+			}
+		}
+		syslog(LOG_DEBUG, "start");
+	}
+
+	function stop() {
+		// TODO: handle result from device->push -> adding participant to listeners
+		$this->execute(array('RTPRx:Stop','RTPTx:Stop','Init:Services'));
+		syslog(LOG_DEBUG, "stop");
+	}
+
+	function leave($ip) {			// single participant leaving
+		// TODO: handle result from device->push -> adding participant to listeners
+		$device = $this->findDeviceByIP($ip);
+		if ($device) {
+			syslog(LOG_DEBUG, "*** device set: $ip");
+			$this->execute(array('RTPRx:Stop','RTPTx:Stop','Init:Services'), 0, $device);
+			unset($device);
+		}
+		syslog(LOG_DEBUG, "leave: $ip");
+		$this->delParticipant($ip);
+	}
+
+	function execute(array $uris, $priority = 0, $device = false) {
+		$xmlExecute = array_map(function ($value) use ($priority) {
+			return sprintf(Push2Talk::XML_EXECUTE_ITEM, $priority, $value);
+		}, $uris); 									// build ExecuteItem xml data-array
+		$xml = sprintf(Push2Talk::XML_EXECUTE, implode('',$xmlExecute));		// build xml data including ExecuteItem
+
+		if ($device) {
+			$device->push($xml);
+		} else {
+			foreach($this->devices as $device) {
+				syslog(LOG_DEBUG, "*** stopping");
+				//yield $device->push($xml);					// return push result back to caller
+				$device->push($xml);
+			}
+		}
+	}
 }
-else {
-    echo "<CiscoIPPhoneText><Title>Error!</Title><Text>No MAC provided by phone!</Text></CiscoIPPhoneText>";
-    die();
+
+
+$push2Talk = new Push2Talk;
+$push2Talk->setAuthentication('cisco', 'cisco');
+$devices = array('192.168.0.137', '192.168.0.142', '192.168.0.138');	// Testing zip
+//$devices = array('10.0.2.225', '10.0.2.227');							// Testing marcello
+//$devices = array('10.15.15.205', '10.15.15.217');						// Testing diederik
+
+// optional settings
+//$push2Talk->multicastAddress = '225.3.15.13';
+//$push2Talk->multicastPort = 16384
+
+try {
+	$isLocked = false;
+	$partList = false;
+	$originator = isset($_GET['originator']) ? $_GET['originator'] : false;
+	$action = isset($_GET['action']) ? $_GET['action'] : 'start';
+	// store session id if stored in query string
+	$push2Talk->session = isset($_GET['session']) ? $_GET['session'] : $push2Talk->session;
+
+	switch($action){
+		case 'start':
+			// asking to join devices defined in $devices array
+			$push2Talk->addDevices($devices);
+			$push2Talk->start($_SERVER['REMOTE_ADDR']);
+			break;
+
+		case 'close':
+			// get devices that really joined
+			$devices = array_merge(array($push2Talk->getOriginator()), $push2Talk->getParticipants());
+			$push2Talk->addDevices($devices);
+			// push close
+			$push2Talk->stop();
+			break;
+
+		case 'leave':
+			// get devices that really joined
+			$devices = array_merge(array($push2Talk->getOriginator()), $push2Talk->getParticipants());
+			$push2Talk->addDevices($devices);
+			// push leave to device leaving
+			$push2Talk->leave($_SERVER['REMOTE_ADDR']);
+			break;
+
+		case 'lock':
+			$isLocked = true;
+			break;
+
+		case 'unlock':
+			$isLocked = false;
+			break;
+
+		case 'join':
+			// add device joining to the device list stored in session
+			$push2Talk->addParticipant($_SERVER['REMOTE_ADDR']);
+			break;
+
+		case 'list':
+			$partList = true;
+			break;
+
+		default:
+			$partList = false;
+			break;
+	}
+
+	// Cisco headers
+	$response = '<CiscoIPPhoneText><Title>PTT</Title><Prompt>Use soft keys to talk</Prompt>';
+	if (!$isLocked && !$partList) {
+		$response .= "<Text>Press and hold the [Talk] soft key to transmit. If you want to speak continuously without holding a button down, you can press and release the [Lock] soft key.</Text>";
+
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Talk</Name>";
+		$response .=  "<URL>RTPTx:Stop</URL>";
+		$response .=  "<Position>1</Position>";
+		$response .=  "<URLDown>RTPMTx:{$push2Talk->multicastAddress}:{$push2Talk->multicastPort}</URLDown>";
+		$response .=  "</SoftKeyItem>";
+
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Exit</Name>";
+		if ($push2Talk->getOriginator() == $_SERVER['REMOTE_ADDR']) {
+			$response .=  "<URL>" . htmlentities("{$baseUrl}?action=close&session={$push2Talk->session}") . "</URL>";
+		} else {
+			$response .=  "<URL>" . htmlentities("{$baseUrl}?action=leave&session={$push2Talk->session}") . "</URL>";
+		}
+		$response .=  "<Position>3</Position>";
+		$response .=  "</SoftKeyItem>";
+
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>PartList</Name>";
+		$response .=  "<URL>" . htmlentities("{$baseUrl}?action=list&session={$push2Talk->session}") . "</URL>";
+		$response .=  "<Position>2</Position>";
+		$response .=  "</SoftKeyItem>";
+
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Lock</Name>";
+		$response .=  "<URL>" . htmlentities("{$baseUrl}?action=lock&session={$push2Talk->session}") . "</URL>";
+		$response .=  "<Position>4</Position>";
+		$response .=  "<URLDown>RTPMTx:{$push2Talk->multicastAddress}:{$push2Talk->multicastPort}</URLDown>";
+		$response .=  "</SoftKeyItem>";
+	} elseif ($isLocked && !$partList) {
+		$response .=  "<Text>Press and release the [Unlock] soft key to return.</Text>";
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Unlock</Name>";
+		$response .=  "<URL>" . htmlentities("{$baseUrl}?action=unlock&session={$push2Talk->session}") . "</URL>";
+		$response .=  "<Position>4</Position>";
+		$response .=  "<URLDown>RTPTx:Stop</URLDown>";
+		$response .=  "</SoftKeyItem>";
+	} elseif ($partList) {
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Talk</Name>";
+		$response .=  "<URL>RTPTx:Stop</URL>";
+		$response .=  "<Position>1</Position>";
+		$response .=  "<URLDown>RTPMTx:{$push2Talk->multicastAddress}:{$push2Talk->multicastPort}</URLDown>";
+		$response .=  "</SoftKeyItem>";
+
+		$response .=  "<Text>Participant list\n".$push2Talk->listParticipants()."</Text>";
+		$response .=  "<SoftKeyItem>";
+		$response .=  "<Name>Back</Name>";
+		$response .=  "<URL>" . htmlentities("{$baseUrl}?action=default&session={$push2Talk->session}") . "</URL>";
+		$response .=  "<Position>2</Position>";
+		$response .=  "</SoftKeyItem>";
+	}
+	$response .= '</CiscoIPPhoneText>';
+	syslog(LOG_DEBUG, "response sent:" . $response);
+
+	echo $response;
+
+}
+catch(Exception $e) {
+	syslog(LOG_DEBUG, "Something went wrong");
 }
 
-if(isset($_GET['close'])) {				// Check if we're closing the app, if so tell the other phones to do the same
-    // Tell each phone to stop multicast Rx/Tx and send the Exit softkey
-    foreach($phones as $phone) {
-        push2phone($phone, "RTPRx:Stop,RTPTx:Stop,SoftKey:Exit", $user, $pwd);
-        // If this is one way PTT (phone sending audio is not receiving it - it is not listed in phones array)
-        if(!in_array($_SERVER['REMOTE_ADDR'], $phones)) {
-            // Send text to phone advising PTT ended, otherwise phone will complain about XML format
-            echo "<CiscoIPPhoneText><Title>PTT</Title><Text>PTT session ended.</Text></CiscoIPPhoneText>";
-        }
-    }
-    die();
-} else {						// if PTT session is still in progress
-    // Check for istalking, if it doesn't exist this must be
-    // the first time the phone has called this page
-    if(isset($_GET['istalking'])) {
-        $istalking = $_GET['istalking'];
-    }
-    else {
-        // Must be our initial request for the page, lets tell everyone to listen
-        $istalking = "false";
-        foreach($phones as $phone) {
-            push2phone($phone, "RTPMRx:{$MCAddress}:{$MCPort}", $user, $pwd);
-        }
-    }
-}
-
-// Set phone's app window title and promt
-echo "<CiscoIPPhoneText><Title>PTT</Title><Prompt>Use soft keys to talk</Prompt>";
-
-// PTT operation
-if($istalking != "true") {
-    echo "<Text>Press and hold the [Talk] soft key to transmit. If you want to speak continuously without holding a button down, you can press and release the [Lock] soft key.</Text>";
-
-    echo "<SoftKeyItem>";
-    echo "<Name>Talk</Name>";
-    echo "<URL>RTPTx:Stop</URL>";
-    echo "<Position>1</Position>";
-    echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
-    echo "</SoftKeyItem>";
-
-    echo "<SoftKeyItem>";
-    echo "<Name>Exit</Name>";
-    echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;close=true</URL>";
-    echo "<Position>3</Position>";
-    echo "<URLDown>RTPRx:Stop</URLDown>";
-    echo "</SoftKeyItem>";
-
-    echo "<SoftKeyItem>";
-    echo "<Name>Lock</Name>";
-    echo "<URL>{$URLBase}ptt.php?name={$MAC}&amp;istalking=true</URL>";
-    echo "<Position>4</Position>";
-    echo "<URLDown>RTPMTx:{$MCAddress}:{$MCPort}</URLDown>";
-    echo "</SoftKeyItem>";
-}
-// Full-duplex, always on
-else {
-    echo "<Text>Press and release the [Unlock] soft key to return.</Text>";
-    echo "<SoftKeyItem>";
-    echo "<Name>Unlock</Name>";
-    echo "<URL>$URLBase/ptt.php?name=$MAC&amp;istalking=false</URL>";
-    echo "<Position>4</Position>";
-    echo "<URLDown>RTPTx:Stop</URLDown>";
-    echo "</SoftKeyItem>";
-}
-
-echo "</CiscoIPPhoneText>";
 ?>
